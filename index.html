@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="robots" content="noindex, nofollow">
+<title>토큰 리더보드</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { background:#0d0d0f; color:#f2f2f2; font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",sans-serif; min-height:100vh; padding:max(16px, env(safe-area-inset-top)) 16px 32px; }
+  .wrap { max-width:480px; margin:0 auto; }
+  header { display:flex; align-items:center; gap:12px; padding:8px 4px 16px; }
+  .plogo { width:44px; height:44px; border-radius:11px; background:#0a0a0a; border:1px solid #2a2a2e; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:24px; color:#fff; font-family:Futura,'Avenir Next',sans-serif; }
+  h1 { font-size:19px; font-weight:800; letter-spacing:-0.3px; }
+  .sub { font-size:12px; color:#8a8a93; margin-top:2px; }
+  .alertbar { background:#3b1214; border:1px solid #7f1d1d; color:#fda4a4; border-radius:12px; padding:10px 14px; font-size:13px; font-weight:600; margin-bottom:14px; }
+  .tabs { display:flex; background:#1a1a1e; border-radius:12px; padding:4px; margin-bottom:16px; }
+  .tab { flex:1; text-align:center; padding:10px 0; font-size:14px; font-weight:600; color:#9a9aa3; border-radius:9px; cursor:pointer; transition:all .15s; }
+  .tab.on { background:#2ea043; color:#fff; }
+  .list { display:flex; flex-direction:column; gap:10px; }
+  .card { display:flex; align-items:center; gap:12px; background:#1a1a1e; border:1px solid #26262b; border-radius:14px; padding:14px 16px; }
+  .card.first { border-color:#3d6b47; background:linear-gradient(135deg,#1d2a1f,#1a1a1e); }
+  .card.stale { opacity:.62; border-style:dashed; border-color:#7f1d1d; }
+  .rank { width:30px; font-size:20px; font-weight:800; text-align:center; color:#8a8a93; flex-shrink:0; }
+  .avatar { width:40px; height:40px; border-radius:50%; background:#2a2a2e; flex-shrink:0; object-fit:cover; }
+  .info { flex:1; min-width:0; }
+  .name { font-size:15px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .msgs { font-size:12px; color:#8a8a93; margin-top:2px; }
+  .warn { font-size:11px; color:#f87171; font-weight:700; margin-top:2px; }
+  .nums { text-align:right; flex-shrink:0; }
+  .tok { font-size:17px; font-weight:800; color:#4ade80; }
+  .tok.zero { color:#5a5a63; }
+  .cost { font-size:12px; color:#d4a94e; margin-top:2px; }
+  footer { text-align:center; color:#5a5a63; font-size:11px; margin-top:24px; line-height:1.8; }
+  .refresh { display:block; margin:20px auto 0; background:#1a1a1e; border:1px solid #2a2a2e; color:#c9c9d1; font-size:13px; padding:10px 22px; border-radius:20px; cursor:pointer; }
+  .lock { text-align:center; padding:80px 20px; color:#8a8a93; font-size:15px; line-height:2; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="plogo">P</div>
+    <div>
+      <h1>토큰 리더보드</h1>
+      <div class="sub">AI 사용량 순위 · 임원 전용</div>
+    </div>
+  </header>
+  <div id="alert"></div>
+  <div class="tabs" id="tabs" style="display:none">
+    <div class="tab" data-k="today">오늘</div>
+    <div class="tab" data-k="week">이번 주</div>
+    <div class="tab on" data-k="month">이번 달</div>
+  </div>
+  <div class="list" id="list"></div>
+  <button class="refresh" id="refresh" style="display:none" onclick="location.reload()">↻ 새로고침</button>
+  <footer id="foot"></footer>
+</div>
+<script>
+const SB = "https://dzmxwsxcwtugnyyfvnja.supabase.co";
+const ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR6bXh3c3hjd3R1Z255eWZ2bmphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEyMzUxNjcsImV4cCI6MjA5NjgxMTE2N30.PkzQD7JJuFdtMGWzm2FC9HFzf1wVW1Wh9wg41SxJKzg";
+const STALE_DAYS = 3;
+const MEDALS = ["🥇","🥈","🥉"];
+let DATA = null;
+
+const KEY = new URLSearchParams(location.search).get("key") || "";
+
+function dstr(d){ return d.toISOString().slice(0,10); }
+function fmtTokens(n){
+  if (n >= 1e8) return (n/1e8).toFixed(1) + "억";
+  if (n >= 1e4) return Math.round(n/1e4).toLocaleString() + "만";
+  return n.toLocaleString();
+}
+function daysBetween(a,b){ return Math.round((new Date(b)-new Date(a))/86400000); }
+
+function build(profiles, snaps){
+  const kst = new Date(Date.now() + 9*3600*1000);
+  const today = dstr(kst);
+  const dow = (kst.getUTCDay()+6)%7;
+  const weekStart = dstr(new Date(kst.getTime() - dow*86400000));
+  const monthStart = today.slice(0,8) + "01";
+
+  const lastDate = {};
+  for (const s of snaps){
+    if (!lastDate[s.user_id] || s.date > lastDate[s.user_id]) lastDate[s.user_id] = s.date;
+  }
+  function aggregate(from){
+    const acc = {};
+    for (const s of snaps){
+      if (s.date < from || s.date > today) continue;
+      const a = acc[s.user_id] || (acc[s.user_id] = {tokens:0, cost:0, msgs:0});
+      a.tokens += s.total_tokens;
+      a.cost += Number(s.cost_usd) || 0;
+      a.msgs += s.messages;
+    }
+    return profiles.map(p => {
+      const a = acc[p.id] || {tokens:0, cost:0, msgs:0};
+      const last = lastDate[p.id] || null;
+      const staleDays = last ? daysBetween(last, today) : 999;
+      return {
+        name: p.name, avatar: p.avatar,
+        tokens: a.tokens, tokensFmt: fmtTokens(a.tokens),
+        cost: "$" + a.cost.toFixed(2), msgs: a.msgs,
+        last: last ? last.slice(5).replace("-","/") : "없음",
+        staleDays, stale: staleDays >= STALE_DAYS,
+      };
+    }).sort((x,y) => y.tokens - x.tokens !== 0 ? y.tokens - x.tokens : x.staleDays - y.staleDays);
+  }
+  const staleCount = profiles.filter(p => {
+    const last = lastDate[p.id];
+    return !last || daysBetween(last, today) >= STALE_DAYS;
+  }).length;
+  return {
+    today: aggregate(today), week: aggregate(weekStart), month: aggregate(monthStart),
+    staleCount,
+    updated: kst.toISOString().slice(5,16).replace("T"," "),
+  };
+}
+
+function render(k){
+  const rows = DATA[k];
+  document.getElementById("list").innerHTML = rows.map((r,i) => {
+    const zero = r.tokens === 0;
+    const medal = (!zero && i < 3) ? MEDALS[i] : (i+1);
+    return `
+    <div class="card ${i===0&&!zero?'first':''} ${r.stale?'stale':''}">
+      <div class="rank">${medal}</div>
+      ${r.avatar ? `<img class="avatar" src="${r.avatar}" alt="">` : '<div class="avatar"></div>'}
+      <div class="info">
+        <div class="name">${r.name}</div>
+        ${r.stale
+          ? `<div class="warn">⚠️ ${r.last === '없음' ? '기록 없음' : '마지막 ' + r.last + ' · ' + r.staleDays + '일째 끊김'}</div>`
+          : `<div class="msgs">${r.msgs.toLocaleString()} 메시지</div>`}
+      </div>
+      <div class="nums">
+        <div class="tok ${zero?'zero':''}">${zero ? '—' : r.tokensFmt}</div>
+        <div class="cost">${zero ? '' : r.cost}</div>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function lock(msg){
+  document.getElementById("list").innerHTML = `<div class="lock">${msg}</div>`;
+}
+
+async function load(){
+  if (!KEY) { lock("🔒 접근 권한이 없습니다<br>받으신 전체 링크(QR)로 열어주세요"); return; }
+  try {
+    const res = await fetch(SB + "/rest/v1/rpc/pafgym_lb", {
+      method: "POST",
+      headers: { "apikey": ANON, "Content-Type": "application/json" },
+      body: JSON.stringify({ k: KEY }),
+    });
+    if (res.status === 401 || res.status === 403) { lock("🔒 접근 권한이 없습니다<br>링크가 잘렸거나 잘못되었습니다"); return; }
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const { profiles, snaps } = await res.json();
+    DATA = build(profiles, snaps);
+    document.getElementById("tabs").style.display = "flex";
+    document.getElementById("refresh").style.display = "block";
+    if (DATA.staleCount > 0) {
+      document.getElementById("alert").innerHTML =
+        `<div class="alertbar">⚠️ ${DATA.staleCount}명의 기록이 ${STALE_DAYS}일 이상 끊겨 있어요 — 앱이 꺼져 있거나 로그인이 풀렸을 수 있습니다</div>`;
+    }
+    document.getElementById("foot").innerHTML =
+      `업데이트 ${DATA.updated} (KST)<br>임원 전용 · 링크를 외부에 공유하지 마세요`;
+    render("month");
+  } catch (e) {
+    lock("⚠️ 데이터를 불러오지 못했어요<br>잠시 후 새로고침해 주세요");
+  }
+}
+
+document.querySelectorAll(".tab").forEach(t => {
+  t.onclick = () => {
+    document.querySelectorAll(".tab").forEach(x => x.classList.remove("on"));
+    t.classList.add("on");
+    render(t.dataset.k);
+  };
+});
+load();
+</script>
+</body>
+</html>
