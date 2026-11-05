@@ -19,6 +19,7 @@
   .tabs { display:flex; background:#1a1a1e; border-radius:12px; padding:4px; margin-bottom:16px; }
   .tab { flex:1; text-align:center; padding:10px 0; font-size:14px; font-weight:600; color:#9a9aa3; border-radius:9px; cursor:pointer; transition:all .15s; }
   .tab.on { background:#2ea043; color:#fff; }
+  .range { text-align:center; font-size:12px; color:#8a8a93; margin:-6px 0 12px; min-height:14px; }
   .list { display:flex; flex-direction:column; gap:10px; }
   .card { display:flex; align-items:center; gap:12px; background:#1a1a1e; border:1px solid #26262b; border-radius:14px; padding:14px 16px; }
   .card.first { border-color:#3d6b47; background:linear-gradient(135deg,#1d2a1f,#1a1a1e); }
@@ -52,7 +53,9 @@
     <div class="tab" data-k="today">오늘</div>
     <div class="tab" data-k="week">이번 주</div>
     <div class="tab on" data-k="month">이번 달</div>
+    <div class="tab" data-k="lastMonth">지난 달</div>
   </div>
+  <div class="range" id="range"></div>
   <div class="list" id="list"></div>
   <button class="refresh" id="refresh" style="display:none" onclick="location.reload()">↻ 새로고침</button>
   <footer id="foot"></footer>
@@ -80,15 +83,19 @@ function build(profiles, snaps){
   const dow = (kst.getUTCDay()+6)%7;
   const weekStart = dstr(new Date(kst.getTime() - dow*86400000));
   const monthStart = today.slice(0,8) + "01";
+  const y = +today.slice(0,4), m = +today.slice(5,7);
+  const lmY = m === 1 ? y - 1 : y, lmM = m === 1 ? 12 : m - 1;
+  const lastMonthStart = `${lmY}-${String(lmM).padStart(2,"0")}-01`;
+  const lastMonthEnd = dstr(new Date(Date.UTC(lmY, lmM, 0)));
 
   const lastDate = {};
   for (const s of snaps){
     if (!lastDate[s.user_id] || s.date > lastDate[s.user_id]) lastDate[s.user_id] = s.date;
   }
-  function aggregate(from){
+  function aggregate(from, to = today, showStale = true){
     const acc = {};
     for (const s of snaps){
-      if (s.date < from || s.date > today) continue;
+      if (s.date < from || s.date > to) continue;
       const a = acc[s.user_id] || (acc[s.user_id] = {tokens:0, cost:0, msgs:0});
       a.tokens += s.total_tokens;
       a.cost += Number(s.cost_usd) || 0;
@@ -103,7 +110,7 @@ function build(profiles, snaps){
         tokens: a.tokens, tokensFmt: fmtTokens(a.tokens),
         cost: "$" + a.cost.toFixed(2), msgs: a.msgs,
         last: last ? last.slice(5).replace("-","/") : "없음",
-        staleDays, stale: staleDays >= STALE_DAYS,
+        staleDays, stale: showStale && staleDays >= STALE_DAYS,
       };
     }).sort((x,y) => y.tokens - x.tokens !== 0 ? y.tokens - x.tokens : x.staleDays - y.staleDays);
   }
@@ -113,6 +120,12 @@ function build(profiles, snaps){
   }).length;
   return {
     today: aggregate(today), week: aggregate(weekStart), month: aggregate(monthStart),
+    lastMonth: aggregate(lastMonthStart, lastMonthEnd, false),
+    ranges: {
+      today: "", week: weekStart.slice(5).replace("-","/") + " ~ " + today.slice(5).replace("-","/"),
+      month: monthStart.slice(5).replace("-","/") + " ~ " + today.slice(5).replace("-","/"),
+      lastMonth: lmM + "월 전체 (" + lastMonthStart.slice(5).replace("-","/") + " ~ " + lastMonthEnd.slice(5).replace("-","/") + ")",
+    },
     staleCount,
     updated: kst.toISOString().slice(5,16).replace("T"," "),
   };
@@ -120,6 +133,7 @@ function build(profiles, snaps){
 
 function render(k){
   const rows = DATA[k];
+  document.getElementById("range").textContent = DATA.ranges[k];
   document.getElementById("list").innerHTML = rows.map((r,i) => {
     const zero = r.tokens === 0;
     const medal = (!zero && i < 3) ? MEDALS[i] : (i+1);
